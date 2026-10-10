@@ -1,11 +1,13 @@
 package com.highlightrecorder.upload
 
 import android.content.Context
+import com.highlightrecorder.upload.auth.DeviceTokenStore
 import kotlinx.coroutines.sync.Mutex
 
 class Dep(
     val settingsRepo: UploadSettingsRepository,
     val repo: UploadTaskRepository,
+    val tokenStore: DeviceTokenStore,
     /** 单上传并发闸(对接协议 §7 建议默认 1)。 */
     val uploadMutex: Mutex = Mutex(),
 )
@@ -25,5 +27,6 @@ object Deps {
         repo = UploadTaskRepository(
             com.highlightrecorder.upload.db.UploadDatabase.get(app).dao(),
         ),
+        tokenStore = DeviceTokenStore(app),
     )
 }

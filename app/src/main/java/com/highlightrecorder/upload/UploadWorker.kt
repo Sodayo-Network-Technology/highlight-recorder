@@ -10,6 +10,7 @@ import android.os.Build
 import androidx.work.CoroutineWorker
 import androidx.work.ForegroundInfo
 import androidx.work.WorkerParameters
+import com.highlightrecorder.upload.auth.SodayoDeviceCredentialProvider
 import com.highlightrecorder.upload.db.UploadTaskEntity
 import com.highlightrecorder.upload.protocol.CloudreveV4Uploader
 import kotlinx.coroutines.Dispatchers
@@ -39,8 +40,9 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
         }
 
         val settings = deps.settingsRepo.snapshot()
-        if (!settings.configured) {
-            deps.repo.markRetryWait(id, runAttemptCount + 1, null, "上传未配置或凭据缺失,请到设置页完成配置")
+        val paired = deps.tokenStore.isPaired()
+        if (!settings.enabled || !settings.serverUrlValid || (!paired && settings.token.isBlank())) {
+            deps.repo.markRetryWait(id, runAttemptCount + 1, null, "上传未配置或未配对,请到设置页完成配置/配对")
             return Result.failure()
         }
         val base = BaseUrlValidator.validate(settings.serverUrl) ?: run {
@@ -53,7 +55,7 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
         deps.repo.markUploading(id)
         return try {
             deps.uploadMutex.withLock {
-                executeUpload(deps, task, settings, base)
+                executeUpload(deps, task, settings, base, paired)
             }
         } catch (e: UploadException) {
             val attempt = runAttemptCount + 1
@@ -63,7 +65,9 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
                     Result.failure()
                 }
                 RetryDisposition.PAUSE_FOR_REAUTH -> {
-                    deps.repo.markRetryWait(id, attempt, null, "需要重新认证: ${e.message}")
+                    // 设备 Token 过期/被撤销:清除本地凭据,提示重新配对(交接单 §3)
+                    if (paired) deps.tokenStore.clear()
+                    deps.repo.markRetryWait(id, attempt, null, "凭据已失效,请重新配对: ${e.message}")
                     Result.failure()
                 }
                 RetryDisposition.RETRY -> {
@@ -86,6 +90,7 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
         task: UploadTaskEntity,
         settings: UploadSettings,
         base: okhttp3.HttpUrl,
+        paired: Boolean,
     ): Result {
         val id = task.clientUploadId
         val source = ClipChunkSource(applicationContext.contentResolver, Uri.parse(task.contentUri), task.sizeBytes)
@@ -96,8 +101,14 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
             current = deps.repo.setSha256(id, sha) ?: return Result.failure()
         }
 
-        // 凭据用本次任务的设置快照;设置变更后下一次重试自动生效
-        val credentials = StaticTokenCredentialProvider(settings.token)
+        // 凭据:设备 Token 优先,未配对回退开发期静态令牌
+        val credentials: CredentialProvider = if (paired) {
+            SodayoDeviceCredentialProvider(deps.tokenStore)
+        } else {
+            StaticTokenCredentialProvider(settings.token)
+        }
+        // 上传目录:配对授予的 ingest_uri 优先(交接单:目标锁定 cloudreve://my/移动端取证)
+        val folder = if (paired) (deps.tokenStore.ingestUri() ?: settings.targetFolder) else settings.targetFolder
         val uploader = CloudreveV4Uploader(base, credentials)
         val fileId = uploader.upload(
             fileName = current.fileName,
@@ -105,13 +116,17 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
             sizeBytes = current.sizeBytes,
             sha256 = current.sha256,
             clientUploadId = current.clientUploadId,
-            targetFolder = settings.targetFolder,
+            targetFolder = folder,
             source = source,
             onProgress = { bytes, parts, total ->
                 deps.repo.updateProgress(id, bytes, parts, total)
             },
         )
-        deps.repo.markDone(id, fileId)
+        // hash_id 解析:上传本身不返回 file_id,按文件名从取证目录列表获取(交接单 §1.2/§4-⑥)
+        val serverFileId = runCatching {
+            uploader.resolveFileId(folder, current.fileName)
+        }.getOrNull()
+        deps.repo.markDone(id, serverFileId ?: fileId)
         if (settings.deleteAfterUpload) {
             runCatching {
                 applicationContext.contentResolver.delete(Uri.parse(current.contentUri), null, null)

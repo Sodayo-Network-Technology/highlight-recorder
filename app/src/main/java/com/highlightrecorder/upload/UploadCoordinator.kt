@@ -29,8 +29,9 @@ object UploadCoordinator {
                 val deps = Deps.get(app)
                 val settings = deps.settingsRepo.snapshot()
                 if (!settings.enabled) return@launch
-                if (!settings.configured) {
-                    FileLogger.log(TAG, "上传已启用但服务器/凭据未配置,跳过自动上传")
+                val paired = deps.tokenStore.isPaired()
+                if (!settings.serverUrlValid || (!paired && settings.token.isBlank())) {
+                    FileLogger.log(TAG, "上传已启用但服务器未配置/未配对,跳过自动上传")
                     return@launch
                 }
                 val name = displayName(app, clipUri)
@@ -42,7 +43,10 @@ object UploadCoordinator {
                 val entity = UploadTaskEntity(
                     clientUploadId = UUID.randomUUID().toString(),
                     contentUri = clipUri.toString(),
-                    fileName = name,
+                    // 文件名策略(交接单 §6):取证目录内唯一,replay_时间_短ID
+                    fileName = "replay_" +
+                        java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.US)
+                            .format(java.util.Date()) + "_" + shortId() + ".mp4",
                     mimeType = "video/mp4",
                     sizeBytes = sizeBytes,
                     recordedAt = now,
@@ -56,6 +60,8 @@ object UploadCoordinator {
             }.onFailure { FileLogger.log(TAG, "onClipSaved failed", it) }
         }
     }
+
+    private fun shortId(): String = UUID.randomUUID().toString().replace("-", "").substring(0, 8)
 
     /** App 启动时恢复队列:清理僵死 UPLOADING,把未完成任务重新入队。 */
     fun reconcile(context: Context) {

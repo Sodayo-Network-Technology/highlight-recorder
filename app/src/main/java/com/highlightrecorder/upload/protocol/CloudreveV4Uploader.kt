@@ -67,12 +67,13 @@ class CloudreveV4Uploader(
         clientUploadId: String,
         targetFolder: String,
         source: ChunkSource,
+        policyId: String? = null,
         onProgress: suspend (bytes: Long, parts: Int, totalParts: Int) -> Unit = { _, _, _ -> },
     ): String? {
         require(sizeBytes > 0) { "空文件不可上传" }
         val folder = targetFolder.trim().trimEnd('/')
         val session = createSessionWithFallback(
-            folder, fileName, sizeBytes, mimeType, sha256, clientUploadId,
+            folder, fileName, sizeBytes, mimeType, sha256, clientUploadId, policyId,
         )
 
         val plan = planFor(session)
@@ -83,10 +84,12 @@ class CloudreveV4Uploader(
             val offset = index * session.chunkSize
             val length = minOf(session.chunkSize, sizeBytes - offset).toInt()
             lastData = when (plan) {
-                is ChunkPlan.RelayApi -> putChunk(
-                    url(CloudreveEndpoints.uploadChunkApi(plan.sessionId, index, plan.chunkSize)),
+                is ChunkPlan.RelayApi -> postChunk(
+                    url(CloudreveEndpoints.uploadChunk(plan.sessionId, index)),
                     source, offset, length,
-                    headers = plan.credential?.let { mapOf("Authorization" to "Bearer $it") } ?: emptyMap(),
+                    // 设备 Token 模式会话无 credential:回退到调用方凭据(交接单 §1.2)
+                    headers = plan.credential?.let { mapOf("Authorization" to "Bearer $it") }
+                        ?: credentials.authHeaders(),
                 )
                 is ChunkPlan.RelayUrl -> putChunk(
                     url(withChunkQuery(plan.urls, index)),
@@ -117,17 +120,18 @@ class CloudreveV4Uploader(
         mimeType: String,
         sha256: String?,
         clientUploadId: String,
+        policyId: String?,
     ): UploadSession =
         try {
-            createSession(folder, fileName, sizeBytes, mimeType, sha256, clientUploadId)
+            createSession(folder, fileName, sizeBytes, mimeType, sha256, clientUploadId, policyId)
         } catch (e: UploadException) {
             if (e.httpCode == 404) {
                 runCatching { createDirectory(folder) }
                 try {
-                    createSession(folder, fileName, sizeBytes, mimeType, sha256, clientUploadId)
+                    createSession(folder, fileName, sizeBytes, mimeType, sha256, clientUploadId, policyId)
                 } catch (e2: UploadException) {
                     if (e2.httpCode == 404 && folder.isNotEmpty()) {
-                        createSession("", fileName, sizeBytes, mimeType, sha256, clientUploadId)
+                        createSession("", fileName, sizeBytes, mimeType, sha256, clientUploadId, policyId)
                     } else {
                         throw e2
                     }
@@ -144,6 +148,7 @@ class CloudreveV4Uploader(
         mimeType: String,
         sha256: String?,
         clientUploadId: String,
+        policyId: String?,
     ): UploadSession {
         val uri = if (folder.isEmpty()) "/$fileName" else "$folder/$fileName"
         val body = buildString {
@@ -152,6 +157,7 @@ class CloudreveV4Uploader(
             append("\"size\":$sizeBytes,")
             append("\"name\":${jsonString(fileName)},")
             append("\"mime_type\":${jsonString(mimeType)},")
+            if (policyId != null) append("\"policy_id\":${jsonString(policyId)},")
             if (sha256 != null) append("\"sha256\":${jsonString(sha256)},")
             // 扩展字段:为将来 Sodayo Ingest Adapter 的幂等/来源语义预留,服务端可忽略
             append("\"client_upload_id\":${jsonString(clientUploadId)},")
@@ -160,10 +166,64 @@ class CloudreveV4Uploader(
         val request = Request.Builder()
             .url(url(CloudreveEndpoints.CREATE_SESSION))
             .header("X-Client-Upload-Id", clientUploadId)
-            .post(body.toRequestBody(JSON_MEDIA_TYPE))
+            .put(body.toRequestBody(JSON_MEDIA_TYPE))   // 契约:创建会话为 PUT(交接单 §1.2)
             .build()
         val (_, text) = send(request, Phase.CREATE)
         return parseSession(envelopeData(text, Phase.CREATE))
+    }
+
+    /** 目录列表:返回取证目录下的文件(id = hash_id,供 OA 关联)。 */
+    suspend fun listFiles(folderUri: String): List<RemoteFile> {
+        val encoded = java.net.URLEncoder.encode(folderUri, "UTF-8")
+        val request = Request.Builder()
+            .url(url("${CloudreveEndpoints.LIST_FILES}?uri=$encoded"))
+            .get()
+            .build()
+        val (_, text) = send(request, Phase.LIST)
+        val data = envelopeData(text, Phase.LIST)
+        val arr = (data as? JsonObject)?.get("files") as? JsonArray ?: return emptyList()
+        return arr.mapNotNull { el ->
+            val f = el as? JsonObject ?: return@mapNotNull null
+            val id = f.string("id", "file_id", "hash_id") ?: return@mapNotNull null
+            RemoteFile(
+                id = id,
+                name = f.string("name", "file_name") ?: "",
+                sizeBytes = f.long("size", "size_bytes"),
+            )
+        }
+    }
+
+    /** 按文件名解析 hash_id;列表偶发滞后时短暂重试,仍找不到返回 null。 */
+    suspend fun resolveFileId(
+        folderUri: String,
+        fileName: String,
+        attempts: Int = 2,
+        retryDelayMs: Long = 2000,
+    ): String? {
+        repeat(attempts) { attempt ->
+            runCatching { listFiles(folderUri) }.getOrNull()
+                ?.firstOrNull { it.name == fileName }
+                ?.let { return it.id }
+            if (attempt < attempts - 1) kotlinx.coroutines.delay(retryDelayMs)
+        }
+        return null
+    }
+
+    /** Cloudreve 自身分片 API:契约方法为 POST(交接单 §1.2)。 */
+    private suspend fun postChunk(
+        url: HttpUrl,
+        source: ChunkSource,
+        offset: Long,
+        length: Int,
+        headers: Map<String, String>,
+    ): JsonElement? {
+        val request = Request.Builder()
+            .url(url)
+            .post(chunkBody(source, offset, length))
+            .apply { headers.forEach { (k, v) -> header(k, v) } }
+            .build()
+        val (_, text) = send(request, Phase.CHUNK, useCredentialHeaders = false)
+        return envelopeData(text, Phase.CHUNK)
     }
 
     private suspend fun putChunk(

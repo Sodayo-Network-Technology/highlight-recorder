@@ -32,6 +32,7 @@ import com.highlightrecorder.upload.db.UploadTaskEntity
 fun UploadScreen(viewModel: UploadViewModel, onBack: () -> Unit) {
     val tasks by viewModel.tasks.collectAsState()
     val settings by viewModel.settings.collectAsState()
+    val pair by viewModel.pairState.collectAsState()
 
     LazyColumn(
         modifier = Modifier
@@ -48,8 +49,11 @@ fun UploadScreen(viewModel: UploadViewModel, onBack: () -> Unit) {
                 when {
                     !settings.enabled -> "云端上传未启用,可在设置页开启;保存的录像仅留在本机。"
                     !settings.serverUrlValid -> "服务器地址未配置或无效(仅允许 https 公网地址)。"
-                    settings.token.isBlank() -> "尚未配置访问凭据。"
-                    else -> "保存成功后自动上传到 Sodayo SH Drive(${settings.targetFolder})。"
+                    settings.token.isBlank() && !pair.paired ->
+                        "尚未配置凭据:请在设置页完成设备配对(推荐)或填写开发期令牌。"
+                    else -> "保存成功后自动上传到 Sodayo SH Drive(${
+                        if (pair.paired) "配对目录" else settings.targetFolder
+                    })。"
                 },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,

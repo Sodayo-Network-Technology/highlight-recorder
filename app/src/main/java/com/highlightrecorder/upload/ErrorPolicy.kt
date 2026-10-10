@@ -28,18 +28,18 @@ object ErrorPolicy {
     /** 单任务最大尝试次数,超过转 FAILED(WorkManager 侧同时兜底)。 */
     const val MAX_ATTEMPTS = 10
 
-    enum class Phase { CREATE, CHUNK, COMPLETE }
+    enum class Phase { CREATE, CHUNK, COMPLETE, LIST }
 
     /**
      * HTTP 状态码 → 处置决定。
-     * 404/410 在建会话阶段通常是端点不匹配(永久);在分片/完成阶段通常是会话过期(换新会话重试)。
+     * 404/410 在建会话/列表阶段通常是端点或目录不匹配(永久);在分片/完成阶段通常是会话过期(换新会话重试)。
      */
     fun dispositionFor(httpCode: Int?, phase: Phase): RetryDisposition = when {
         httpCode == null -> RetryDisposition.RETRY
         httpCode == 401 -> RetryDisposition.PAUSE_FOR_REAUTH
         httpCode == 403 -> RetryDisposition.PERMANENT
         httpCode == 404 || httpCode == 410 ->
-            if (phase == Phase.CREATE) RetryDisposition.PERMANENT else RetryDisposition.RETRY
+            if (phase == Phase.CREATE || phase == Phase.LIST) RetryDisposition.PERMANENT else RetryDisposition.RETRY
         httpCode == 409 -> RetryDisposition.RETRY
         httpCode == 413 -> RetryDisposition.PERMANENT
         httpCode == 429 -> RetryDisposition.RETRY

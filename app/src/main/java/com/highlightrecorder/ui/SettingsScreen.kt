@@ -14,7 +14,9 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
@@ -26,6 +28,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -39,6 +42,8 @@ import kotlin.math.roundToInt
 fun SettingsScreen(viewModel: MainViewModel, uploadViewModel: UploadViewModel, onBack: () -> Unit) {
     val settings by viewModel.settings.collectAsState()
     val upload by uploadViewModel.settings.collectAsState()
+    val pair by uploadViewModel.pairState.collectAsState()
+    var pairCode by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf("") }
 
     val hevcSupported = remember {
         MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos.any { info ->
@@ -257,6 +262,7 @@ fun SettingsScreen(viewModel: MainViewModel, uploadViewModel: UploadViewModel, o
                 placeholder = { Text("https://drive.example.com") },
                 singleLine = true,
                 isError = upload.serverUrl.isNotEmpty() && !upload.serverUrlValid,
+                keyboardOptions = KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Uri),
                 supportingText = {
                     if (upload.serverUrl.isNotEmpty() && !upload.serverUrlValid) {
                         Text("仅允许 https 公网地址,拒绝内网/本机地址")
@@ -264,10 +270,56 @@ fun SettingsScreen(viewModel: MainViewModel, uploadViewModel: UploadViewModel, o
                 },
                 modifier = Modifier.fillMaxWidth(),
             )
+
+            // ---- 设备配对(交接单 §1.1):网页端发起配对 → 10 位码输入此处 ----
+            Text("设备配对", fontWeight = FontWeight.Bold)
+            Text(
+                if (pair.paired) {
+                    val expiry = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US)
+                        .format(java.util.Date(pair.expiresAtMs))
+                    "已配对 设备#${pair.deviceId} · 凭据有效期至 $expiry"
+                } else {
+                    "未配对。请先在 Drive 网页端发起配对,把 10 位配对码输入此处(5 分钟内有效)。"
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = if (pair.paired) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            if (!pair.paired) {
+                OutlinedTextField(
+                    value = pairCode,
+                    onValueChange = { v -> pairCode = v.trim().take(12) },
+                    label = { Text("配对码") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Email),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        onClick = { uploadViewModel.pair(pairCode) },
+                        enabled = !pair.busy && pairCode.isNotBlank(),
+                    ) {
+                        Text(if (pair.busy) "配对中…" else "立即配对")
+                    }
+                }
+            } else {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    androidx.compose.material3.TextButton(
+                        onClick = { uploadViewModel.unpair() },
+                    ) { Text("解除本机配对") }
+                }
+                Text(
+                    "注:服务端撤销请到 Drive 网页端「设备管理」操作",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            pair.error?.let {
+                Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+            }
             OutlinedTextField(
                 value = upload.token,
                 onValueChange = { v -> uploadViewModel.updateSettings { it.copy(token = v) } },
-                label = { Text("访问凭据(开发期令牌)") },
+                label = { Text("访问凭据(开发期备用,配对后可留空)") },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
             )

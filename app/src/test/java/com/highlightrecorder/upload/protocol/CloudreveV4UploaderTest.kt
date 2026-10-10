@@ -68,7 +68,7 @@ class CloudreveV4UploaderTest {
         assertEquals(3, progress)
 
         val create = server.takeRequest()
-        assertEquals("POST", create.method)
+        assertEquals("PUT", create.method)
         assertEquals("/api/v4/file/upload", create.path)
         assertEquals("Bearer user-token", create.getHeader("Authorization"))
         assertEquals("cid-1", create.getHeader("X-Client-Upload-Id"))
@@ -78,19 +78,59 @@ class CloudreveV4UploaderTest {
         assert(createBody.contains("\"source\":\"android_replay\""))
 
         val chunk0 = server.takeRequest()
-        assertEquals("PUT", chunk0.method)
-        assertEquals("/api/v4/file/upload/s1/0?chunk_size=8", chunk0.path)
+        assertEquals("POST", chunk0.method)
+        assertEquals("/api/v4/file/upload/s1/0", chunk0.path)
         assertEquals("Bearer sess-cred", chunk0.getHeader("Authorization"))
         assertEquals(8L, chunk0.body.size)
         assertEquals(0, chunk0.body.readByteArray()[0].toInt())
 
         val chunk1 = server.takeRequest()
-        assertEquals("/api/v4/file/upload/s1/1?chunk_size=8", chunk1.path)
+        assertEquals("/api/v4/file/upload/s1/1", chunk1.path)
         assertEquals(8L, chunk1.body.size)
 
         val chunk2 = server.takeRequest()
-        assertEquals("/api/v4/file/upload/s1/2?chunk_size=8", chunk2.path)
+        assertEquals("/api/v4/file/upload/s1/2", chunk2.path)
         assertEquals(4L, chunk2.body.size)
+    }
+
+    @Test
+    fun `设备Token模式 无会话credential时分片回退用户凭据`() = runTest {
+        val data = ByteArray(4) { it.toByte() }
+        server.enqueue(ok("""{"code":0,"data":{"session_id":"sd1","chunk_size":4,"storage_policy":{"policy_type":"local"}}}"""))
+        server.enqueue(ok("""{"code":0,"data":{"file":{"id":"fid-9"}}}"""))
+        server.start()
+
+        val fileId = uploader("sdkt_abc").upload(
+            fileName = "a.mp4", mimeType = "video/mp4", sizeBytes = 4L,
+            sha256 = null, clientUploadId = "c-d", targetFolder = "/手机取证",
+            source = sourceOf(data),
+        )
+        assertEquals("fid-9", fileId)
+
+        val create = server.takeRequest()
+        assertEquals("PUT", create.method)
+        assertEquals("Bearer sdkt_abc", create.getHeader("Authorization"))
+        val chunk = server.takeRequest()
+        assertEquals("POST", chunk.method)
+        assertEquals("/api/v4/file/upload/sd1/0", chunk.path)
+        assertEquals("设备 Token 分片必须携带认证头", "Bearer sdkt_abc", chunk.getHeader("Authorization"))
+    }
+
+    @Test
+    fun `列表解析并按文件名解析hash_id`() = runTest {
+        server.enqueue(ok("""{"code":0,"data":{"files":[{"id":"h-1","name":"replay_a.mp4","size":10},{"id":"h-2","name":"replay_b.mp4","size":5}]}}"""))
+        server.enqueue(ok("""{"code":0,"data":{"files":[{"id":"h-1","name":"replay_a.mp4","size":10}]}}"""))
+        server.start()
+        val up = uploader()
+
+        val id = up.resolveFileId("/手机取证", "replay_b.mp4", attempts = 1)
+        assertEquals("h-2", id)
+        val listReq = server.takeRequest()
+        assertEquals("GET", listReq.method)
+        assert(listReq.path!!.startsWith("/api/v4/file?uri="))
+
+        val missing = up.resolveFileId("/手机取证", "missing.mp4", attempts = 1)
+        assertNull(missing)
     }
 
     @Test
@@ -111,7 +151,7 @@ class CloudreveV4UploaderTest {
         assertEquals("fid-9", fileId)
 
         val create2 = server.takeRequest()
-        assertEquals("POST", create2.method)
+        assertEquals("PUT", create2.method)
         assertEquals("/api/v4/file/upload", create2.path)
         assertNull("建会话走用户凭据", create2.getHeader("Authorization")?.let { if (it == "Bearer user-token") null else it })
 

@@ -24,8 +24,9 @@ class ErrorPolicyTest {
 
     @Test
     fun `404按阶段区分`() {
-        // 建会话 404:端点不匹配 → 永久;分片/完成 404:会话过期 → 重试换新会话
+        // 建会话/列表 404:端点或目录不匹配 → 永久;分片/完成 404:会话过期 → 重试换新会话
         assertEquals(RetryDisposition.PERMANENT, d(404, ErrorPolicy.Phase.CREATE))
+        assertEquals(RetryDisposition.PERMANENT, d(404, ErrorPolicy.Phase.LIST))
         assertEquals(RetryDisposition.RETRY, d(404, ErrorPolicy.Phase.CHUNK))
         assertEquals(RetryDisposition.RETRY, d(410, ErrorPolicy.Phase.COMPLETE))
     }
