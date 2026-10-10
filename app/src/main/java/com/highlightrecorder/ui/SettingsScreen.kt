@@ -18,6 +18,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Card
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -35,8 +36,9 @@ import com.highlightrecorder.data.needsMic
 import kotlin.math.roundToInt
 
 @Composable
-fun SettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
+fun SettingsScreen(viewModel: MainViewModel, uploadViewModel: UploadViewModel, onBack: () -> Unit) {
     val settings by viewModel.settings.collectAsState()
+    val upload by uploadViewModel.settings.collectAsState()
 
     val hevcSupported = remember {
         MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos.any { info ->
@@ -230,6 +232,75 @@ fun SettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
                 valueRange = 1f..90f,
             )
             Text("视频库删除的视频会先进入回收站,到期自动清理", style = MaterialTheme.typography.bodySmall)
+        }
+
+        // ---- 云端上传 ----
+        Section("云端上传(Sodayo SH Drive)") {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("保存后自动上传")
+                    Text(
+                        "保存成功即入队,断网自动重试;状态见「上传队列」",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Switch(
+                    checked = upload.enabled,
+                    onCheckedChange = { on -> uploadViewModel.updateSettings { it.copy(enabled = on) } },
+                )
+            }
+            OutlinedTextField(
+                value = upload.serverUrl,
+                onValueChange = { v -> uploadViewModel.updateSettings { it.copy(serverUrl = v) } },
+                label = { Text("服务器地址") },
+                placeholder = { Text("https://drive.example.com") },
+                singleLine = true,
+                isError = upload.serverUrl.isNotEmpty() && !upload.serverUrlValid,
+                supportingText = {
+                    if (upload.serverUrl.isNotEmpty() && !upload.serverUrlValid) {
+                        Text("仅允许 https 公网地址,拒绝内网/本机地址")
+                    }
+                },
+                modifier = Modifier.fillMaxWidth(),
+            )
+            OutlinedTextField(
+                value = upload.token,
+                onValueChange = { v -> uploadViewModel.updateSettings { it.copy(token = v) } },
+                label = { Text("访问凭据(开发期令牌)") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            OutlinedTextField(
+                value = upload.targetFolder,
+                onValueChange = { v -> uploadViewModel.updateSettings { it.copy(targetFolder = v) } },
+                label = { Text("上传目标目录") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("仅 Wi-Fi 上传", modifier = Modifier.weight(1f))
+                Switch(
+                    checked = upload.wifiOnly,
+                    onCheckedChange = { on -> uploadViewModel.updateSettings { it.copy(wifiOnly = on) } },
+                )
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("上传成功后删除本地原件")
+                    Text("默认保留,双保险", style = MaterialTheme.typography.bodySmall)
+                }
+                Switch(
+                    checked = upload.deleteAfterUpload,
+                    onCheckedChange = { on -> uploadViewModel.updateSettings { it.copy(deleteAfterUpload = on) } },
+                )
+            }
+            Text(
+                "说明:设备绑定授权由 Drive 侧开发中,当前使用测试实例令牌;" +
+                    "上传不等于取证关联,仍需在 OA 处罚记录页手动关联。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
 
         // ---- 赞助 ----

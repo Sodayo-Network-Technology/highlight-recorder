@@ -281,6 +281,10 @@ class RecordingService : Service() {
                     if (audio.isEmpty()) null else audioFormat,
                 )
                 savedEvents.tryEmit(SavedEvent(result.uri.toString(), result.durationMs))
+                // 云端上传:文件已落盘 → 任务入库 → 入队(顺序不可倒,失败不影响保存)
+                com.highlightrecorder.upload.UploadCoordinator.onClipSaved(
+                    this@RecordingService, result.uri, result.sizeBytes, result.durationMs,
+                )
                 updateNotification("已保存 %.1f 秒高光".format(result.durationMs / 1000f))
             } catch (t: Throwable) {
                 Log.e(TAG, "save failed", t)

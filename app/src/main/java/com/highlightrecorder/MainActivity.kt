@@ -29,6 +29,8 @@ import com.highlightrecorder.ui.MainViewModel
 import com.highlightrecorder.ui.OnboardingScreen
 import com.highlightrecorder.ui.SettingsScreen
 import com.highlightrecorder.ui.TrashScreen
+import com.highlightrecorder.ui.UploadScreen
+import com.highlightrecorder.ui.UploadViewModel
 import com.highlightrecorder.ui.theme.HighlightRecorderTheme
 
 class MainActivity : ComponentActivity() {
@@ -65,8 +67,11 @@ class MainActivity : ComponentActivity() {
                     }
 
                     // 子页面的返回(含侧滑手势)统一回到上一级;主页/引导页返回走系统默认(退出)
-                    BackHandler(enabled = route == "settings" || route == "library" || route == "trash") {
-                        route = if (route == "trash") "library" else "home"
+                    BackHandler(enabled = route != "home" && route != "onboarding") {
+                        route = when (route) {
+                            "trash" -> "library"
+                            else -> "home"
+                        }
                     }
 
                     // 前后台切换时刷新权限状态(从系统设置返回后自动检测)
@@ -111,6 +116,7 @@ class MainActivity : ComponentActivity() {
 
                         "settings" -> SettingsScreen(
                             viewModel = vm,
+                            uploadViewModel = viewModel(),
                             onBack = { route = "home" },
                         )
 
@@ -121,12 +127,18 @@ class MainActivity : ComponentActivity() {
 
                         "trash" -> TrashScreen(onBack = { route = "library" })
 
+                        "uploads" -> UploadScreen(
+                            viewModel = viewModel(),
+                            onBack = { route = "home" },
+                        )
+
                         else -> HomeScreen(
                             viewModel = vm,
                             onRequestStartRecording = requestProjection,
                             onGoOnboarding = { route = "onboarding" },
                             onGoSettings = { route = "settings" },
                             onGoLibrary = { route = "library" },
+                            onGoUploads = { route = "uploads" },
                         )
                     }
                 }

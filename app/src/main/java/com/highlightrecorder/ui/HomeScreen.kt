@@ -32,6 +32,7 @@ fun HomeScreen(
     onGoOnboarding: () -> Unit,
     onGoSettings: () -> Unit,
     onGoLibrary: () -> Unit,
+    onGoUploads: () -> Unit,
 ) {
     val state by viewModel.recordingState.collectAsState()
     val buffered by viewModel.bufferedSeconds.collectAsState()
@@ -135,9 +136,10 @@ fun HomeScreen(
 
         Spacer(Modifier.weight(1f))
 
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(onClick = onGoSettings, modifier = Modifier.weight(1f)) { Text("设置") }
             OutlinedButton(onClick = onGoLibrary, modifier = Modifier.weight(1f)) { Text("视频库") }
+            OutlinedButton(onClick = onGoUploads, modifier = Modifier.weight(1f)) { Text("上传队列") }
         }
     }
 }
