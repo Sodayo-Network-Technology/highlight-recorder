@@ -68,12 +68,13 @@ class CloudreveV4Uploader(
         targetFolder: String,
         source: ChunkSource,
         policyId: String? = null,
+        lastModifiedMs: Long? = null,
         onProgress: suspend (bytes: Long, parts: Int, totalParts: Int) -> Unit = { _, _, _ -> },
     ): String? {
         require(sizeBytes > 0) { "空文件不可上传" }
         val folder = targetFolder.trim().trimEnd('/')
         val session = createSessionWithFallback(
-            folder, fileName, sizeBytes, mimeType, sha256, clientUploadId, policyId,
+            folder, fileName, sizeBytes, mimeType, sha256, clientUploadId, policyId, lastModifiedMs,
         )
 
         val plan = planFor(session)
@@ -121,17 +122,18 @@ class CloudreveV4Uploader(
         sha256: String?,
         clientUploadId: String,
         policyId: String?,
+        lastModifiedMs: Long?,
     ): UploadSession =
         try {
-            createSession(folder, fileName, sizeBytes, mimeType, sha256, clientUploadId, policyId)
+            createSession(folder, fileName, sizeBytes, mimeType, sha256, clientUploadId, policyId, lastModifiedMs)
         } catch (e: UploadException) {
             if (e.httpCode == 404) {
                 runCatching { createDirectory(folder) }
                 try {
-                    createSession(folder, fileName, sizeBytes, mimeType, sha256, clientUploadId, policyId)
+                    createSession(folder, fileName, sizeBytes, mimeType, sha256, clientUploadId, policyId, lastModifiedMs)
                 } catch (e2: UploadException) {
                     if (e2.httpCode == 404 && folder.isNotEmpty()) {
-                        createSession("", fileName, sizeBytes, mimeType, sha256, clientUploadId, policyId)
+                        createSession("", fileName, sizeBytes, mimeType, sha256, clientUploadId, policyId, lastModifiedMs)
                     } else {
                         throw e2
                     }
@@ -149,6 +151,7 @@ class CloudreveV4Uploader(
         sha256: String?,
         clientUploadId: String,
         policyId: String?,
+        lastModifiedMs: Long?,
     ): UploadSession {
         val uri = if (folder.isEmpty()) "/$fileName" else "$folder/$fileName"
         val body = buildString {
@@ -157,6 +160,8 @@ class CloudreveV4Uploader(
             append("\"size\":$sizeBytes,")
             append("\"name\":${jsonString(fileName)},")
             append("\"mime_type\":${jsonString(mimeType)},")
+            // 契约 §4.1:last_modified 为 Unix 毫秒(REV6 勘误:13 位)
+            if (lastModifiedMs != null) append("\"last_modified\":$lastModifiedMs,")
             if (policyId != null) append("\"policy_id\":${jsonString(policyId)},")
             if (sha256 != null) append("\"sha256\":${jsonString(sha256)},")
             // 扩展字段:为将来 Sodayo Ingest Adapter 的幂等/来源语义预留,服务端可忽略
@@ -257,7 +262,7 @@ class CloudreveV4Uploader(
             .url(url(CloudreveEndpoints.CREATE_DIRECTORY))
             .post(body.toRequestBody(JSON_MEDIA_TYPE))
             .build()
-        send(request, Phase.CREATE, allowCredentialRefresh = false)
+        send(request, Phase.CREATE)
     }
 
     // ---- 请求执行与响应解析 ----
@@ -266,45 +271,68 @@ class CloudreveV4Uploader(
         request: Request,
         phase: Phase,
         useCredentialHeaders: Boolean = true,
-        allowCredentialRefresh: Boolean = true,
     ): Pair<Int, String> {
         val signed = request.newBuilder().apply {
             if (useCredentialHeaders) credentials.authHeaders().forEach { (k, v) -> header(k, v) }
         }.build()
         http.newCall(signed).await().use { resp ->
-            if (resp.code == 401 && allowCredentialRefresh && credentials.refresh()) {
-                return send(request, phase, useCredentialHeaders, allowCredentialRefresh = false)
-            }
+            // body 只读一次;非 2xx 也可能携带 JSON envelope 业务码(设备端点拒绝路径实测形态)
+            val text = resp.body?.string().orEmpty()
             if (!resp.isSuccessful) {
+                val env = parseEnvelope(text)
+                val business = env?.code?.takeIf { it != 0 }
                 throw UploadException(
                     httpCode = resp.code,
-                    disposition = ErrorPolicy.dispositionFor(resp.code, phase),
-                    message = "HTTP ${resp.code} [$phase]${resp.message.takeIf { it.isNotBlank() }?.let { ": $it" } ?: ""}",
-                    retryAfterSeconds = if (resp.code == 429) {
-                        resp.header("Retry-After")?.toLongOrNull()
+                    disposition = if (business != null) {
+                        ErrorPolicy.dispositionForBusiness(business)
                     } else {
-                        null
+                        ErrorPolicy.dispositionFor(resp.code, phase)
                     },
+                    message = buildString {
+                        append("HTTP ${resp.code} [$phase]")
+                        if (business != null) append(" code=$business")
+                        env?.msg?.takeIf { it.isNotBlank() }?.let { append(": $it") }
+                        env?.correlationId?.let { append(" (correlation_id=$it)") }
+                    },
+                    retryAfterSeconds = if (resp.code == 429) resp.header("Retry-After")?.toLongOrNull() else null,
+                    businessCode = business,
+                    correlationId = env?.correlationId,
                 )
             }
-            return resp.code to (resp.body?.string().orEmpty())
+            return resp.code to text
         }
     }
 
-    /** Cloudreve 统一响应包裹 {code,data,msg}:业务码≠0 视为永久失败并透传 msg。 */
+    /** Cloudreve 统一响应包裹 {code,data,msg,correlation_id}:业务码≠0 按契约 §7 分流。 */
     private fun envelopeData(text: String, phase: Phase): JsonElement? {
-        val root = runCatching { json.parseToJsonElement(text) }.getOrNull()
+        val env = parseEnvelope(text)
             ?: throw UploadException(null, RetryDisposition.PERMANENT, "[$phase] 响应不是合法 JSON")
-        val obj = root as? JsonObject
-            ?: throw UploadException(null, RetryDisposition.PERMANENT, "[$phase] 响应结构异常")
-        val code = obj["code"]?.jsonPrimitive?.intOrNull ?: 0
+        val code = env.code ?: 0
         if (code != 0) {
             throw UploadException(
-                null, RetryDisposition.PERMANENT,
-                "服务端拒绝(code=$code): ${obj["msg"]?.jsonPrimitive?.contentOrNull ?: "未知错误"}",
+                httpCode = null,
+                disposition = ErrorPolicy.dispositionForBusiness(code),
+                message = buildString {
+                    append("服务端业务码 $code [$phase]: ${env.msg ?: "未知错误"}")
+                    env.correlationId?.let { append(" (correlation_id=$it)") }
+                },
+                businessCode = code,
+                correlationId = env.correlationId,
             )
         }
-        return obj["data"]
+        return env.data
+    }
+
+    private class Envelope(val code: Int?, val msg: String?, val data: JsonElement?, val correlationId: String?)
+
+    private fun parseEnvelope(text: String): Envelope? {
+        val root = runCatching { json.parseToJsonElement(text) }.getOrNull() as? JsonObject ?: return null
+        return Envelope(
+            code = (root["code"] as? JsonPrimitive)?.intOrNull,
+            msg = (root["msg"] as? JsonPrimitive)?.contentOrNull,
+            data = root["data"],
+            correlationId = (root["correlation_id"] as? JsonPrimitive)?.contentOrNull,
+        )
     }
 
     private fun parseSession(data: JsonElement?): UploadSession {

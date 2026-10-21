@@ -40,15 +40,27 @@ object UploadCoordinator {
                     return@launch
                 }
                 val now = System.currentTimeMillis()
+                // upload_id 确定性生成(契约 §7):UUIDv5(设备ID+SHA256+采集日期),
+                // 同任务重试必须复用——故在入库前先流式算哈希(1-3s,IO 线程)
+                val source = com.highlightrecorder.upload.ClipChunkSource(
+                    app.contentResolver, clipUri, sizeBytes,
+                )
+                val sha256 = runCatching { sha256Of(source, sizeBytes) }.getOrNull()
+                val uploadId = if (sha256 != null) {
+                    UploadIds.stableUploadId(deps.tokenStore.deviceId(), sha256, now)
+                } else {
+                    UUID.randomUUID().toString() // 哈希失败兜底:随机 id,Worker 内补算 sha256
+                }
                 val entity = UploadTaskEntity(
-                    clientUploadId = UUID.randomUUID().toString(),
+                    clientUploadId = uploadId,
                     contentUri = clipUri.toString(),
-                    // 文件名策略(交接单 §6):取证目录内唯一,replay_时间_短ID
-                    fileName = "replay_" +
+                    // 上传文件名含 upload_id 短码(契约 §5 建议形态,唯一性由 upload_id 保证)
+                    fileName = "replay-" +
                         java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.US)
-                            .format(java.util.Date()) + "_" + shortId() + ".mp4",
+                            .format(java.util.Date(now)) + "-" + uploadId.substring(0, 8) + ".mp4",
                     mimeType = "video/mp4",
                     sizeBytes = sizeBytes,
+                    sha256 = sha256,
                     recordedAt = now,
                     durationMs = durationMs,
                     createdAt = now,
@@ -60,8 +72,6 @@ object UploadCoordinator {
             }.onFailure { FileLogger.log(TAG, "onClipSaved failed", it) }
         }
     }
-
-    private fun shortId(): String = UUID.randomUUID().toString().replace("-", "").substring(0, 8)
 
     /** App 启动时恢复队列:清理僵死 UPLOADING,把未完成任务重新入队。 */
     fun reconcile(context: Context) {

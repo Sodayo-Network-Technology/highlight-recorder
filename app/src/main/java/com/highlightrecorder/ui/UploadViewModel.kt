@@ -50,10 +50,12 @@ class UploadViewModel(app: Application) : AndroidViewModel(app) {
         )
     }
 
-    /** 用网页端生成的配对码兑换设备 Token;成功即保存(Keystore 加密)。 */
-    fun pair(pairCode: String) {
+    /** 用网页端生成的配对码兑换设备 Token;成功即保存(Keystore 加密)。
+     *  设备名必须与网页端发起配对时的名称一致(契约 §3.2,不符=403)。 */
+    fun pair(pairCode: String, deviceName: String) {
         val code = pairCode.trim()
-        if (code.isEmpty() || _pairState.value.busy) return
+        val name = deviceName.trim()
+        if (code.isEmpty() || name.isEmpty() || _pairState.value.busy) return
         viewModelScope.launch {
             _pairState.value = _pairState.value.copy(busy = true, error = null)
             try {
@@ -61,7 +63,7 @@ class UploadViewModel(app: Application) : AndroidViewModel(app) {
                 val base = BaseUrlValidator.validate(settings.serverUrl)
                     ?: throw com.highlightrecorder.upload.auth.PairingException("请先填写有效的服务器地址(https 公网)")
                 val client = DevicePairingClient(base)
-                val result = client.exchange(code, android.os.Build.MODEL)
+                val result = client.exchange(code, name)
                 deps.tokenStore.save(result.token, result.deviceId, result.ingestUri, result.expiresAtMs)
                 refreshPairState()
                 _pairState.value = _pairState.value.copy(busy = false)

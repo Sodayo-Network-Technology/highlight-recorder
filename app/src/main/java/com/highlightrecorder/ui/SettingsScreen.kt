@@ -44,6 +44,9 @@ fun SettingsScreen(viewModel: MainViewModel, uploadViewModel: UploadViewModel, o
     val upload by uploadViewModel.settings.collectAsState()
     val pair by uploadViewModel.pairState.collectAsState()
     var pairCode by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf("") }
+    var deviceName by androidx.compose.runtime.remember {
+        androidx.compose.runtime.mutableStateOf(android.os.Build.MODEL ?: "")
+    }
 
     val hevcSupported = remember {
         MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos.any { info ->
@@ -288,15 +291,22 @@ fun SettingsScreen(viewModel: MainViewModel, uploadViewModel: UploadViewModel, o
                 OutlinedTextField(
                     value = pairCode,
                     onValueChange = { v -> pairCode = v.trim().take(12) },
-                    label = { Text("配对码") },
+                    label = { Text("配对码(10 位)") },
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Email),
                     modifier = Modifier.fillMaxWidth(),
                 )
+                OutlinedTextField(
+                    value = deviceName,
+                    onValueChange = { v -> deviceName = v.take(64) },
+                    label = { Text("设备名称(须与网页端发起配对时一致)") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(
-                        onClick = { uploadViewModel.pair(pairCode) },
-                        enabled = !pair.busy && pairCode.isNotBlank(),
+                        onClick = { uploadViewModel.pair(pairCode, deviceName) },
+                        enabled = !pair.busy && pairCode.isNotBlank() && deviceName.isNotBlank(),
                     ) {
                         Text(if (pair.busy) "配对中…" else "立即配对")
                     }

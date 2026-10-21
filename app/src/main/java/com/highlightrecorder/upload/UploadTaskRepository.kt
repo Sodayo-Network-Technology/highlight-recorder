@@ -57,6 +57,15 @@ class UploadTaskRepository(private val dao: UploadTaskDao) {
 
     suspend fun resetForRetry(id: String) = dao.resetForRetry(id)
 
+    /** 同名异物换名:更新 upload_id(主键)与上传文件名(契约 §7,≤3 次,由 Worker 判界)。 */
+    suspend fun renameIdentity(oldId: String, newId: String, newFileName: String) {
+        val current = dao.byId(oldId) ?: return
+        dao.renameIdentity(
+            oldId,
+            current.copy(clientUploadId = newId, fileName = newFileName, updatedAt = System.currentTimeMillis()),
+        )
+    }
+
     private suspend fun mutate(id: String, transform: (UploadTaskEntity) -> UploadTaskEntity): UploadTaskEntity? {
         val current = dao.byId(id) ?: return null
         val next = transform(current).copy(updatedAt = System.currentTimeMillis())

@@ -10,6 +10,7 @@ import androidx.room.PrimaryKey
 import androidx.room.Query
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import androidx.room.Transaction
 import androidx.room.Update
 import kotlinx.coroutines.flow.Flow
 
@@ -79,6 +80,13 @@ interface UploadTaskDao {
 
     @Query("DELETE FROM upload_tasks WHERE clientUploadId = :id")
     suspend fun delete(id: String)
+
+    /** 同名异物换名重传:更新 upload_id(主键)与文件名,事务内删旧插新(契约 §7 有界递增)。 */
+    @Transaction
+    suspend fun renameIdentity(oldId: String, updated: UploadTaskEntity) {
+        delete(oldId)
+        insert(updated)
+    }
 }
 
 @Database(entities = [UploadTaskEntity::class], version = 1, exportSchema = false)

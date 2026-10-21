@@ -171,15 +171,96 @@ class CloudreveV4UploaderTest {
     }
 
     @Test
-    fun `401且无法续期时暂停队列`() = runTest {
+    fun `HTTP401判定AUTH_SUSPECT且不清凭据`() = runTest {
         server.enqueue(MockResponse().setResponseCode(401))
         server.start()
         try {
             uploader().upload("a.mp4", "video/mp4", 1L, null, "c", "", sourceOf(ByteArray(1)))
             throw AssertionError("应当抛出 UploadException")
         } catch (e: UploadException) {
-            assertEquals(RetryDisposition.PAUSE_FOR_REAUTH, e.disposition)
+            assertEquals(RetryDisposition.AUTH_SUSPECT, e.disposition)
         }
+    }
+
+    @Test
+    fun `HTTP401加40020载荷判定AUTH_SUSPECT并捕获correlation`() = runTest {
+        server.enqueue(
+            MockResponse().setResponseCode(401)
+                .addHeader("Content-Type", "application/json")
+                .setBody("""{"code":40020,"msg":"device token invalid, expired or revoked","correlation_id":"corr-1"}"""),
+        )
+        server.start()
+        try {
+            uploader().upload("a.mp4", "video/mp4", 1L, null, "c", "", sourceOf(ByteArray(1)))
+            throw AssertionError("应当抛出 UploadException")
+        } catch (e: UploadException) {
+            assertEquals(RetryDisposition.AUTH_SUSPECT, e.disposition)
+            assertEquals(40020, e.businessCode)
+            assertEquals("corr-1", e.correlationId)
+            assert(e.message!!.contains("corr-1"))
+        }
+    }
+
+    @Test
+    fun `同名冲突40004进入弱确认流程`() = runTest {
+        server.enqueue(
+            ok("""{"code":40004,"msg":"Object existed","correlation_id":"corr-2"}"""),
+        )
+        server.start()
+        try {
+            uploader().upload("a.mp4", "video/mp4", 1L, null, "c", "", sourceOf(ByteArray(1)))
+            throw AssertionError("应当抛出 UploadException")
+        } catch (e: UploadException) {
+            assertEquals(RetryDisposition.WEAK_CONFIRM, e.disposition)
+            assertEquals(40004, e.businessCode)
+            assertEquals("corr-2", e.correlationId)
+        }
+    }
+
+    @Test
+    fun `403已知msg为请求错误_未知403安全拒绝并携带诊断`() = runTest {
+        server.enqueue(
+            MockResponse().setResponseCode(403)
+                .addHeader("Content-Type", "application/json")
+                .setBody("""{"code":403,"msg":"limited to ingest folder"}"""),
+        )
+        server.enqueue(
+            MockResponse().setResponseCode(403)
+                .addHeader("Content-Type", "application/json")
+                .setBody("""{"code":403,"msg":"weird rejection","correlation_id":"corr-3"}"""),
+        )
+        server.start()
+        // 已知 msg:请求错误(客户端 bug),PERMANENT,不触发 AUTH_SUSPECT
+        try {
+            uploader().upload("a.mp4", "video/mp4", 1L, null, "c", "", sourceOf(ByteArray(1)))
+            throw AssertionError("应当抛出 UploadException")
+        } catch (e: UploadException) {
+            assertEquals(RetryDisposition.PERMANENT, e.disposition)
+            assert(e.message!!.contains("limited to ingest"))
+        }
+        // 未知 msg:安全拒绝,PERMANENT + correlation_id 诊断
+        try {
+            uploader().upload("a.mp4", "video/mp4", 1L, null, "c", "", sourceOf(ByteArray(1)))
+            throw AssertionError("应当抛出 UploadException")
+        } catch (e: UploadException) {
+            assertEquals(RetryDisposition.PERMANENT, e.disposition)
+            assertEquals("corr-3", e.correlationId)
+        }
+    }
+
+    @Test
+    fun `建会话携带last_modified毫秒`() = runTest {
+        server.enqueue(
+            ok("""{"code":0,"data":{"session_id":"s-lm","chunk_size":4,"storage_policy":{"policy_type":"local"}}}"""),
+        )
+        server.enqueue(ok("""{"code":0,"data":{"file":{"id":"f-lm"}}}"""))
+        server.start()
+        uploader().upload(
+            "a.mp4", "video/mp4", 4L, null, "c-lm", "", sourceOf(ByteArray(4)),
+            lastModifiedMs = 1791800000000L,
+        )
+        val create = server.takeRequest()
+        assert(create.body.readUtf8().contains("\"last_modified\":1791800000000"))
     }
 
     @Test

@@ -81,9 +81,19 @@ class DevicePairingClient(
             .post(body.toRequestBody(JSON_MEDIA))
             .build()
         http.newCall(request).await().use { resp ->
+            // body 只读一次;非 2xx 也防御性解析 envelope(B5:错误体可能是 JSON 业务码)
             val text = resp.body?.string().orEmpty()
             if (!resp.isSuccessful) {
-                throw PairingException("HTTP ${resp.code}: ${resp.message.ifBlank { "配对请求失败" }}")
+                val env = runCatching { json.parseToJsonElement(text) }.getOrNull() as? JsonObject
+                val msg = env?.let { o -> (o["msg"] as? JsonPrimitive)?.contentOrNull }
+                val corr = env?.let { o -> (o["correlation_id"] as? JsonPrimitive)?.contentOrNull }
+                throw PairingException(
+                    buildString {
+                        append("HTTP ${resp.code}")
+                        msg?.takeIf { it.isNotBlank() }?.let { append(": $it") }
+                        corr?.let { append(" (correlation_id=$it)") }
+                    },
+                )
             }
             val obj = runCatching { json.parseToJsonElement(text) }.getOrNull() as? JsonObject
                 ?: throw PairingException("响应不是合法 JSON")
