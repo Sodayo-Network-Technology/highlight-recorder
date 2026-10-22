@@ -102,6 +102,7 @@ class UploadViewModel(app: Application) : AndroidViewModel(app) {
             UploadTaskEntity.STATE_UPLOADING -> "上传中"
             UploadTaskEntity.STATE_RETRY_WAIT -> "等待重试"
             UploadTaskEntity.STATE_DONE -> "已上传"
+            UploadTaskEntity.STATE_UNRESOLVED -> "待人工确认"
             else -> "失败"
         }
     }

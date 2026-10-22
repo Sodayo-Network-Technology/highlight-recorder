@@ -127,10 +127,53 @@ class CloudreveV4UploaderTest {
         assertEquals("h-2", id)
         val listReq = server.takeRequest()
         assertEquals("GET", listReq.method)
-        assert(listReq.path!!.startsWith("/api/v4/file?uri="))
+        // 交接 §C.3:弱确认列表必须显式 page_size=1000(默认仅 ~100 条)
+        assert("page_size=1000" in listReq.path!!)
 
         val missing = up.resolveFileId("/手机取证", "missing.mp4", attempts = 1)
         assertNull(missing)
+    }
+
+    @Test
+    fun `列表结果达页大小上限视为可能截断`() = runTest {
+        server.enqueue(ok("""{"code":0,"data":{"files":[{"id":"h-1","name":"a.mp4","size":1},{"id":"h-2","name":"b.mp4","size":1}]}}"""))
+        server.enqueue(ok("""{"code":0,"data":{"files":[{"id":"h-1","name":"a.mp4","size":1}]}}"""))
+        server.start()
+        val up = uploader()
+
+        // pageSize=2 返回 2 条 → 截断不可证伪
+        val full = up.listFiles("/手机取证", pageSize = 2)
+        assertEquals(2, full.files.size)
+        assert(full.possiblyTruncated)
+        assert(server.takeRequest().path!!.contains("page_size=2"))
+
+        // pageSize=2 返回 1 条 → 可证明完整
+        val partial = up.listFiles("/手机取证", pageSize = 2)
+        assertEquals(1, partial.files.size)
+        assert(!partial.possiblyTruncated)
+    }
+
+    @Test
+    fun `业务码404也触发目录补救回退`() = runTest {
+        val data = ByteArray(4) { it.toByte() }
+        // 形态:HTTP 200 + JSON code=404(目录不存在),而非 HTTP 404
+        server.enqueue(ok("""{"code":404,"msg":"object not found"}"""))
+        server.enqueue(ok("""{"code":0,"data":{}}""")) // 建目录响应
+        server.enqueue(ok("""{"code":0,"data":{"session_id":"s-b404","chunk_size":4,"storage_policy":{"policy_type":"local"}}}"""))
+        server.enqueue(ok("""{"code":0,"data":{"file":{"id":"f-b404"}}}"""))
+        server.start()
+
+        val fileId = uploader().upload(
+            "a.mp4", "video/mp4", 4L, null, "cid-b404", "/被删目录",
+            sourceOf(data),
+        )
+        assertEquals("f-b404", fileId)
+        val first = server.takeRequest()
+        assert(first.body.readUtf8().contains("/被删目录/a.mp4"))
+        val retry = server.takeRequest() // 建目录
+        assertEquals("/api/v4/directory", retry.path)
+        val second = server.takeRequest()
+        assert(second.body.readUtf8().contains("/被删目录/a.mp4"))
     }
 
     @Test

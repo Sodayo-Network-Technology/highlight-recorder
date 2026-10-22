@@ -114,6 +114,8 @@ class CloudreveV4Uploader(
     // ---- 三步协议 ----
 
     /** 建会话;目标目录 404 时先补救目录,仍失败则回退根目录重试一次。 */
+    /** 建会话;目录不存在(HTTP 404 或业务码 404)时先补救目录,仍失败则回退根目录重试一次。
+     *  交接 §B.4:配对时服务端已自动建「移动端取证」,此路径仅覆盖用户事后删目录的边缘情况。 */
     private suspend fun createSessionWithFallback(
         folder: String,
         fileName: String,
@@ -123,16 +125,17 @@ class CloudreveV4Uploader(
         clientUploadId: String,
         policyId: String?,
         lastModifiedMs: Long?,
-    ): UploadSession =
-        try {
+    ): UploadSession {
+        fun isNotFound(e: UploadException) = e.httpCode == 404 || e.businessCode == 404
+        return try {
             createSession(folder, fileName, sizeBytes, mimeType, sha256, clientUploadId, policyId, lastModifiedMs)
         } catch (e: UploadException) {
-            if (e.httpCode == 404) {
+            if (isNotFound(e)) {
                 runCatching { createDirectory(folder) }
                 try {
                     createSession(folder, fileName, sizeBytes, mimeType, sha256, clientUploadId, policyId, lastModifiedMs)
                 } catch (e2: UploadException) {
-                    if (e2.httpCode == 404 && folder.isNotEmpty()) {
+                    if (isNotFound(e2) && folder.isNotEmpty()) {
                         createSession("", fileName, sizeBytes, mimeType, sha256, clientUploadId, policyId, lastModifiedMs)
                     } else {
                         throw e2
@@ -142,6 +145,7 @@ class CloudreveV4Uploader(
                 throw e
             }
         }
+    }
 
     private suspend fun createSession(
         folder: String,
@@ -177,17 +181,21 @@ class CloudreveV4Uploader(
         return parseSession(envelopeData(text, Phase.CREATE))
     }
 
-    /** 目录列表:返回取证目录下的文件(id = hash_id,供 OA 关联)。 */
-    suspend fun listFiles(folderUri: String): List<RemoteFile> {
+    /**
+     * 目录列表:返回取证目录下的文件(id = hash_id,供 OA 关联)。
+     * 显式携带 page_size(交接 §C.3:默认仅 ~100 条,弱确认必须放大);
+     * 结果数达到 [pageSize] 时视为可能截断,由调用方按「确认不充分」处理。
+     */
+    suspend fun listFiles(folderUri: String, pageSize: Int = WEAK_CONFIRM_PAGE_SIZE): ListResult {
         val encoded = java.net.URLEncoder.encode(folderUri, "UTF-8")
         val request = Request.Builder()
-            .url(url("${CloudreveEndpoints.LIST_FILES}?uri=$encoded"))
+            .url(url("${CloudreveEndpoints.LIST_FILES}?uri=$encoded&page_size=$pageSize"))
             .get()
             .build()
         val (_, text) = send(request, Phase.LIST)
         val data = envelopeData(text, Phase.LIST)
-        val arr = (data as? JsonObject)?.get("files") as? JsonArray ?: return emptyList()
-        return arr.mapNotNull { el ->
+        val arr = (data as? JsonObject)?.get("files") as? JsonArray ?: return ListResult(emptyList(), pageSize)
+        val files = arr.mapNotNull { el ->
             val f = el as? JsonObject ?: return@mapNotNull null
             val id = f.string("id", "file_id", "hash_id") ?: return@mapNotNull null
             RemoteFile(
@@ -196,6 +204,7 @@ class CloudreveV4Uploader(
                 sizeBytes = f.long("size", "size_bytes"),
             )
         }
+        return ListResult(files, pageSize)
     }
 
     /** 按文件名解析 hash_id;列表偶发滞后时短暂重试,仍找不到返回 null。 */
@@ -207,7 +216,7 @@ class CloudreveV4Uploader(
     ): String? {
         repeat(attempts) { attempt ->
             runCatching { listFiles(folderUri) }.getOrNull()
-                ?.firstOrNull { it.name == fileName }
+                ?.files?.firstOrNull { it.name == fileName }
                 ?.let { return it.id }
             if (attempt < attempts - 1) kotlinx.coroutines.delay(retryDelayMs)
         }

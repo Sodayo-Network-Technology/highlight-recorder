@@ -107,6 +107,7 @@ private fun TaskCard(task: UploadTaskEntity, onRetry: () -> Unit, onRemove: () -
                     UploadTaskEntity.STATE_FAILED -> "失败" to MaterialTheme.colorScheme.error
                     UploadTaskEntity.STATE_UPLOADING -> "上传中" to MaterialTheme.colorScheme.tertiary
                     UploadTaskEntity.STATE_RETRY_WAIT -> "等待重试" to MaterialTheme.colorScheme.tertiary
+                    UploadTaskEntity.STATE_UNRESOLVED -> "待人工确认" to MaterialTheme.colorScheme.error
                     else -> "排队中" to MaterialTheme.colorScheme.onSurfaceVariant
                 }
                 Text(label, color = color, style = MaterialTheme.typography.labelLarge)
@@ -142,6 +143,7 @@ private fun TaskCard(task: UploadTaskEntity, onRetry: () -> Unit, onRemove: () -
                         UploadTaskEntity.STATE_FAILED,
                         UploadTaskEntity.STATE_RETRY_WAIT,
                         UploadTaskEntity.STATE_QUEUED,
+                        UploadTaskEntity.STATE_UNRESOLVED,
                     )
                 ) {
                     TextButton(onClick = onRetry) { Text("重试") }

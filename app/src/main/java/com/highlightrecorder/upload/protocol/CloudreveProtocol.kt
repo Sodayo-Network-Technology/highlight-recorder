@@ -69,6 +69,22 @@ data class RemoteFile(
 )
 
 /**
+ * 目录列表结果(2026-10-22 服务端交接 §C.4):
+ * page 参数不可靠(page=1/2 返回相同数据);page_size 有效但 MaxPageSize=2000;
+ * 结果数达到请求上限时无法证明目录完整 → [possiblyTruncated]=true,
+ * 弱确认不得据此断言文件不存在。
+ */
+class ListResult(
+    val files: List<RemoteFile>,
+    val requestedPageSize: Int,
+) {
+    val possiblyTruncated: Boolean get() = files.size >= requestedPageSize
+}
+
+/** 弱确认列表查询的固定页大小(交接 §C.3:显式 page_size=1000,避免默认 100 条)。 */
+const val WEAK_CONFIRM_PAGE_SIZE = 1000
+
+/**
  * 是否需要显式完成回调:对象存储类(S3/OSS/COS/KS3/OBS/BOS)需要;
  * 本机/从机在最后分片后自动完成(交接单:末片自动 Complete)。以 Fork 实际策略为准。
  */

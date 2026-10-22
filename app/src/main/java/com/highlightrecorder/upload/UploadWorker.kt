@@ -76,7 +76,7 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
                 }
                 // 契约 §7:40004 同名冲突/40011 会话无效——弱确认流程,绝不直接判成功
                 RetryDisposition.WEAK_CONFIRM -> {
-                    handleWeakConfirm(deps, task, settings, base, paired, attempt)
+                    handleWeakConfirm(deps, task, settings, base, paired, attempt, e)
                 }
                 RetryDisposition.RETRY -> {
                     val delayMs = ErrorPolicy.retryDelayMillis(attempt, e.retryAfterSeconds)
@@ -97,10 +97,13 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
     private fun diagnose(e: UploadException): String = e.message ?: "未知上传错误"
 
     /**
-     * 40004/40011 弱确认(契约 §7):查列表核对 name+size。
-     * - 候选存在且 size 相符 → 弱确认结案(content-verify: name+size;【不删本地原件】);
+     * 40004/40011 弱确认(交接 2026-10-22 §C.3):显式 page_size=1000 列表,仅在本任务
+     * 目标目录内按精确文件名找候选(冲突按完整 URI 匹配,跨目录不冲突)。
+     * - 同名且 size 相符 → 弱确认结案(不构成内容完整性证明,【不删本地原件】);
      * - 同名异物 → 文件名递增 -2/-3(≤3)换 uri 重传;
-     * - 无候选 → 同 upload_id 重建会话重传(服务端无残留,安全)。
+     * - 无候选且列表可证明完整 → 同 upload_id 重建会话重传(服务端无残留,安全);
+     * - 无候选且列表可能截断(达到 page_size 上限) → 确认不充分:保留任务/原件,
+     *   不自动重传,等待人工在 UI 重试。
      */
     private suspend fun handleWeakConfirm(
         deps: Dep,
@@ -109,6 +112,7 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
         base: okhttp3.HttpUrl,
         paired: Boolean,
         attempt: Int,
+        cause: UploadException,
     ): Result {
         val id = task.clientUploadId
         val credentials: CredentialProvider = if (paired) {
@@ -117,36 +121,49 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
             StaticTokenCredentialProvider(settings.token)
         }
         val folder = if (paired) (deps.tokenStore.ingestUri() ?: settings.targetFolder) else settings.targetFolder
-        val files = CloudreveV4Uploader(base, credentials).let { up ->
-            runCatching { up.listFiles(folder) }.getOrElse { emptyList() }
+        val listResult = CloudreveV4Uploader(base, credentials).let { up ->
+            runCatching { up.listFiles(folder) }.getOrElse {
+                // 列表查询本身失败(网络/鉴权):按可重试退避,不动原件
+                val delayMs = ErrorPolicy.retryDelayMillis(attempt)
+                deps.repo.markRetryWait(id, attempt, System.currentTimeMillis() + delayMs, "弱确认列表查询失败: ${it.message}")
+                return Result.retry()
+            }
         }
-        val candidate = files.firstOrNull { it.name == task.fileName }
+        val candidate = listResult.files.firstOrNull { it.name == task.fileName }
 
-        return when {
-            // 弱确认结案:size 相符即视为同一内容(name+size 弱证明,不构成内容完整性证明)
-            candidate != null && candidate.sizeBytes == task.sizeBytes -> {
-                deps.repo.markDone(id, candidate.id)
+        return when (WeakConfirm.decide(
+            hasCandidate = candidate != null,
+            sizeMatches = candidate?.sizeBytes == task.sizeBytes,
+            listPossiblyTruncated = listResult.possiblyTruncated,
+        )) {
+            WeakConfirmDecision.CONFIRMED -> {
+                deps.repo.markDone(id, candidate!!.id)
                 Result.success()
             }
-            // 同名异物:另一内容占了该文件名 → 换 -2/-3 后缀(≤3)重传
-            candidate != null -> {
+            WeakConfirmDecision.RENAME_AND_RETRY -> {
                 val suffix = maxOf(2, UploadIds.currentSuffix(task.fileName) + 1)
                 val newName = UploadIds.fileNameWithSuffix(task.fileName, suffix)
                 if (newName == null) {
                     deps.repo.markFailed(id, "同名异物且重命名次数用尽(>3),请手动处理: ${task.fileName}")
                     Result.failure()
                 } else {
-                    val newId = "$id-${suffix}"
+                    val newId = "$id-$suffix"
                     deps.repo.renameIdentity(id, newId, newName)
                     UploadScheduler.enqueue(applicationContext, newId, settings.wifiOnly)
                     Result.success()
                 }
             }
-            // 无候选:会话无效/过期未合并,服务端无残留文件——同 upload_id 重建会话重传(契约 §7)
-            else -> {
+            WeakConfirmDecision.SAFE_REUPLOAD -> {
                 val delayMs = ErrorPolicy.retryDelayMillis(attempt)
-                deps.repo.markRetryWait(id, attempt, System.currentTimeMillis() + delayMs, "弱确认未过(目录无同名文件),同 upload_id 重建会话重传")
+                deps.repo.markRetryWait(id, attempt, System.currentTimeMillis() + delayMs, "弱确认未过(列表完整无同名文件),同 upload_id 重建会话重传")
                 Result.retry()
+            }
+            WeakConfirmDecision.INSUFFICIENT_LIST -> {
+                deps.repo.markUnresolved(
+                    id,
+                    "确认不充分:目录文件数达列表上限(${listResult.requestedPageSize}),无法证明目标文件不存在;任务与原件已保留,请人工核实后重试。原因: ${diagnose(cause)}",
+                )
+                Result.failure() // 不自动重传
             }
         }
     }

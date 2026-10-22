@@ -98,3 +98,28 @@ object ErrorPolicy {
         return (backoff + jitter).coerceAtMost(60_000L)
     }
 }
+
+/** 弱确认决策(2026-10-22 服务端交接 §C.3,独立函数便于真值表单测)。 */
+enum class WeakConfirmDecision {
+    /** 同名且 size 相符:name+size 弱确认结案(保留原件)。 */
+    CONFIRMED,
+
+    /** 同名异物:文件名 -2/-3 递增(≤3)换 uri 重传。 */
+    RENAME_AND_RETRY,
+
+    /** 无候选且列表可证明完整:同 upload_id 重建会话安全重传。 */
+    SAFE_REUPLOAD,
+
+    /** 无候选且列表可能截断:不能断言文件不存在——标记确认不充分,不自动重传。 */
+    INSUFFICIENT_LIST,
+}
+
+object WeakConfirm {
+    fun decide(hasCandidate: Boolean, sizeMatches: Boolean, listPossiblyTruncated: Boolean): WeakConfirmDecision =
+        when {
+            hasCandidate && sizeMatches -> WeakConfirmDecision.CONFIRMED
+            hasCandidate -> WeakConfirmDecision.RENAME_AND_RETRY
+            listPossiblyTruncated -> WeakConfirmDecision.INSUFFICIENT_LIST
+            else -> WeakConfirmDecision.SAFE_REUPLOAD
+        }
+}

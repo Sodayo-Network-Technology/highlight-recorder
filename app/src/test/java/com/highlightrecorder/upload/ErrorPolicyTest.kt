@@ -70,4 +70,18 @@ class ErrorPolicyTest {
         val high = ErrorPolicy.retryDelayMillis(20)
         assertTrue("退避封顶60秒,实际 $high", high <= 60_000L)
     }
+
+    @Test
+    fun `弱确认决策真值表(交接2026-10-22_C3)`() {
+        // 同名 + size 相符 → 弱确认结案
+        assertEquals(WeakConfirmDecision.CONFIRMED, WeakConfirm.decide(true, true, false))
+        assertEquals(WeakConfirmDecision.CONFIRMED, WeakConfirm.decide(true, true, true))
+        // 同名异物 → 换名重传
+        assertEquals(WeakConfirmDecision.RENAME_AND_RETRY, WeakConfirm.decide(true, false, false))
+        assertEquals(WeakConfirmDecision.RENAME_AND_RETRY, WeakConfirm.decide(true, false, true))
+        // 无候选 + 列表完整 → 同 upload_id 安全重传
+        assertEquals(WeakConfirmDecision.SAFE_REUPLOAD, WeakConfirm.decide(false, false, false))
+        // 无候选 + 列表可能截断 → 确认不充分,绝不自动重传
+        assertEquals(WeakConfirmDecision.INSUFFICIENT_LIST, WeakConfirm.decide(false, false, true))
+    }
 }

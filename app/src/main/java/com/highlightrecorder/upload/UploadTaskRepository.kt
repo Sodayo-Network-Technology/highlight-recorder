@@ -55,6 +55,10 @@ class UploadTaskRepository(private val dao: UploadTaskDao) {
     suspend fun markFailed(id: String, error: String?): UploadTaskEntity? =
         mutate(id) { it.copy(state = UploadTaskEntity.STATE_FAILED, lastError = error) }
 
+    /** 确认不充分:保留任务/原件/凭据,不自动重传(交接 §C.3-5)。 */
+    suspend fun markUnresolved(id: String, error: String?): UploadTaskEntity? =
+        mutate(id) { it.copy(state = UploadTaskEntity.STATE_UNRESOLVED, lastError = error) }
+
     suspend fun resetForRetry(id: String) = dao.resetForRetry(id)
 
     /** 同名异物换名:更新 upload_id(主键)与上传文件名(契约 §7,≤3 次,由 Worker 判界)。 */

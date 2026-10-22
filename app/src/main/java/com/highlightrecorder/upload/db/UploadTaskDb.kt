@@ -51,6 +51,10 @@ data class UploadTaskEntity(
         const val STATE_RETRY_WAIT = "RETRY_WAIT"
         const val STATE_DONE = "DONE"
         const val STATE_FAILED = "FAILED"
+
+        /** 确认不充分(2026-10-22 交接 §C.3-5):列表可能截断,无法断言文件存在与否;
+         *  不自动重传,保留任务与原件,等待人工在 UI 决定重试。 */
+        const val STATE_UNRESOLVED = "UNRESOLVED"
     }
 }
 
