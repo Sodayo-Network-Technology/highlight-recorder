@@ -20,12 +20,32 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    signingConfigs {
+        create("rc") {
+            // release-CANDIDATE local signing for UAT distribution only.
+            // Official production signing remains an Owner decision.
+            storeFile = rootProject.file("rc-candidate.keystore")
+            storePassword = "sodayo-rc-cand"
+            keyAlias = "rc-candidate"
+            keyPassword = "sodayo-rc-cand"
+        }
+    }
     buildTypes {
         debug {
             isMinifyEnabled = false
             // isolated-stack integration only: allows http + private hosts
             // (e.g. emulator -> host 10.0.2.2). NEVER enabled in release.
             buildConfigField("boolean", "ALLOW_PRIVATE_BASE_URL", "true")
+        }
+        create("rc") {
+            isMinifyEnabled = false
+            isDebuggable = false
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
+            signingConfig = signingConfigs.getByName("rc")
+            buildConfigField("boolean", "ALLOW_PRIVATE_BASE_URL", "false")
         }
         release {
             isMinifyEnabled = false
