@@ -11,15 +11,23 @@ import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
  */
 object BaseUrlValidator {
 
+    /**
+     * debug 构建的隔离栈联调旁路:允许 http + 私网/环回(如模拟器 10.0.2.2 指向
+     * 宿主隔离栈)。release 的 ALLOW_PRIVATE_BASE_URL 恒 false,发行红线不变。
+     */
+    private val isolatedBypass: Boolean get() =
+        com.highlightrecorder.BuildConfig.DEBUG && com.highlightrecorder.BuildConfig.ALLOW_PRIVATE_BASE_URL
+
     /** 校验并返回规范化地址;不合法返回 null。 */
     fun validate(raw: String): HttpUrl? {
         val url = raw.trim().toHttpUrlOrNull() ?: return null
-        if (url.scheme != "https") return null
+        if (url.scheme != "https" && !isolatedBypass) return null
         if (url.username.isNotEmpty() || url.password.isNotEmpty()) return null
         val host = url.host.lowercase()
         if (host.isEmpty()) return null
-        if (host == "localhost" || host.endsWith(".localhost") ||
-            host.endsWith(".local") || host.endsWith(".internal")
+        if (!isolatedBypass && (
+            host == "localhost" || host.endsWith(".localhost") ||
+            host.endsWith(".local") || host.endsWith(".internal"))
         ) return null
         return if (host.contains(':')) validateIpv6(host, url) else validateIpv4OrDomain(host, url)
     }
@@ -27,7 +35,7 @@ object BaseUrlValidator {
     private fun validateIpv4OrDomain(host: String, url: HttpUrl): HttpUrl? {
         if (!host[0].isDigit()) return url // 普通域名放行
         if (!IPV4_REGEX.matches(host)) return null
-        return if (isPrivateIpv4(host)) null else url
+        return if (isPrivateIpv4(host) && !isolatedBypass) null else url
     }
 
     private fun validateIpv6(host: String, url: HttpUrl): HttpUrl? {

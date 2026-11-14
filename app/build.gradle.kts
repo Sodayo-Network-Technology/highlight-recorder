@@ -23,6 +23,9 @@ android {
     buildTypes {
         debug {
             isMinifyEnabled = false
+            // isolated-stack integration only: allows http + private hosts
+            // (e.g. emulator -> host 10.0.2.2). NEVER enabled in release.
+            buildConfigField("boolean", "ALLOW_PRIVATE_BASE_URL", "true")
         }
         release {
             isMinifyEnabled = false
@@ -41,6 +44,7 @@ android {
         jvmTarget = "17"
     }
     buildFeatures {
+        buildConfig = true
         compose = true
     }
 }
