@@ -22,12 +22,17 @@ android {
 
     signingConfigs {
         create("rc") {
-            // release-CANDIDATE local signing for UAT distribution only.
-            // Official production signing remains an Owner decision.
-            storeFile = rootProject.file("rc-candidate.keystore")
-            storePassword = "sodayo-rc-cand"
-            keyAlias = "rc-candidate"
-            keyPassword = "sodayo-rc-cand"
+            // release-CANDIDATE signing, credentials ONLY from the environment
+            // (or a local gradle.properties) — never committed. The original
+            // rc-candidate key was retired after its keystore+passwords were
+            // accidentally committed publicly (ac22356); it must not be reused.
+            val ks = System.getenv("RC_KEYSTORE_PATH")
+            if (ks != null && file(ks).exists()) {
+                storeFile = file(ks)
+                storePassword = System.getenv("RC_STORE_PASSWORD") ?: ""
+                keyAlias = System.getenv("RC_KEY_ALIAS") ?: ""
+                keyPassword = System.getenv("RC_KEY_PASSWORD") ?: System.getenv("RC_STORE_PASSWORD") ?: ""
+            }
         }
     }
     buildTypes {

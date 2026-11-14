@@ -13,3 +13,7 @@
 .android-sdk/
 .tools/
 dist/
+
+# retired 2026-11-14: keystore was committed publicly (ac22356) - key retired, never reuse
+rc-candidate.keystore
+*.keystore
