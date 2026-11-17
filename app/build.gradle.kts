@@ -58,6 +58,10 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            // R31-4（GPT 6961641422）：BaseUrlValidator 引用该 BuildConfig 字段，
+            // release 此前未定义=compileReleaseKotlin 必败（上游遗留；历史包均走
+            // rc 变体故未暴露）。显式 false：发行红线严格 HTTPS+公网不变。
+            buildConfigField("boolean", "ALLOW_PRIVATE_BASE_URL", "false")
         }
     }
 
