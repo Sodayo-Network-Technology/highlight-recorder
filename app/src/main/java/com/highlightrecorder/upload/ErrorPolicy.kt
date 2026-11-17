@@ -123,3 +123,33 @@ object WeakConfirm {
             else -> WeakConfirmDecision.SAFE_REUPLOAD
         }
 }
+
+// ---- P0-B（GPT 6961327400）：重试时间语义统一与用户可见文案 ----
+
+/**
+ * AUTH_SUSPECT 用户文案（纯函数，可单测）。
+ * 真实恢复机制：Result.failure() 后 Worker 结束——不存在"权限恢复后立即自动执行"；
+ * 自动续传发生在【下次打开 App】（UploadCoordinator.reconcile 重新入队全部 pending）。
+ * 行动指引前置（UI lastError 两行截断时不丢失关键操作）；技术诊断附尾供排障。
+ */
+fun authSuspectUserMessage(diagnostic: String): String =
+    "设备可能被撤销或账号被冻结。请到「设置 → 重新配对」后点重试；" +
+        "权限恢复后，下次打开 App 也会自动继续上传。（${diagnostic}）"
+
+/**
+ * 队列卡片状态副标题（纯函数，可单测）。
+ * 语义对齐 WorkManager 真实行为：
+ *  - RETRY_WAIT + nextRetryAt!=null：走 Result.retry() 的系统指数退避（30s 起），
+ *    repo 里的 nextRetryAt 是 ErrorPolicy 自己算的（1s→64s+jitter）与 WM 不一致——
+ *    不再显示具体时刻（误导源），改为进度感（已重试 N 次）；
+ *  - RETRY_WAIT + nextRetryAt==null：认证暂停（无系统重试，等待配对/权限恢复）；
+ *  - UNRESOLVED：弱确认不充分，需要用户点重试重新核对；
+ *  - QUEUED：排队中（WorkManager 网络约束满足后执行）。
+ */
+fun queueStateSubtitle(state: String, nextRetryAt: Long?, retryCount: Int): String = when {
+    state == "RETRY_WAIT" && nextRetryAt != null ->
+        if (retryCount > 0) "自动重试中 · 已重试 $retryCount 次" else "自动重试中"
+    state == "RETRY_WAIT" -> "认证已暂停"
+    state == "UNRESOLVED" -> "需点重试确认"
+    else -> ""
+}

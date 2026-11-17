@@ -25,6 +25,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.highlightrecorder.upload.UploadSettings
+import com.highlightrecorder.upload.queueStateSubtitle
 import com.highlightrecorder.upload.db.UploadTaskEntity
 
 /** 上传队列:任务状态一览(管理层可一眼看出谁没传),支持手动重试与清除记录。 */
@@ -102,14 +103,19 @@ private fun TaskCard(task: UploadTaskEntity, onRetry: () -> Unit, onRemove: () -
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f),
                 )
-                val (label, color) = when (task.state) {
-                    UploadTaskEntity.STATE_DONE -> "已上传" to MaterialTheme.colorScheme.primary
-                    UploadTaskEntity.STATE_FAILED -> "失败" to MaterialTheme.colorScheme.error
-                    UploadTaskEntity.STATE_UPLOADING -> "上传中" to MaterialTheme.colorScheme.tertiary
-                    UploadTaskEntity.STATE_RETRY_WAIT -> "等待重试" to MaterialTheme.colorScheme.tertiary
-                    // R31：UNRESOLVED=弱确认不充分（列表可能截断），需要人点重试
-                    // 重新核对——状态名直接告诉用户下一步动作，不再只是抽象「待确认」
-                    UploadTaskEntity.STATE_UNRESOLVED -> "需重试确认" to MaterialTheme.colorScheme.error
+                // P0-B：状态区分四类（GPT 6961327400）——系统计划重试/认证暂停/
+                // 需人工确认/排队。RETRY_WAIT 按 nextRetryAt 是否为空分裂：
+                // 非空=系统重试中；空=认证暂停（AUTH_SUSPECT 保留 Token 无系统重试）
+                val (label, color) = when {
+                    task.state == UploadTaskEntity.STATE_DONE -> "已上传" to MaterialTheme.colorScheme.primary
+                    task.state == UploadTaskEntity.STATE_FAILED -> "失败" to MaterialTheme.colorScheme.error
+                    task.state == UploadTaskEntity.STATE_UPLOADING -> "上传中" to MaterialTheme.colorScheme.tertiary
+                    task.state == UploadTaskEntity.STATE_RETRY_WAIT && task.nextRetryAt != null ->
+                        "自动重试中" to MaterialTheme.colorScheme.tertiary
+                    task.state == UploadTaskEntity.STATE_RETRY_WAIT ->
+                        "认证已暂停" to MaterialTheme.colorScheme.error
+                    task.state == UploadTaskEntity.STATE_UNRESOLVED ->
+                        "需重试确认" to MaterialTheme.colorScheme.error
                     else -> "排队中" to MaterialTheme.colorScheme.onSurfaceVariant
                 }
                 Text(label, color = color, style = MaterialTheme.typography.labelLarge)
@@ -126,13 +132,11 @@ private fun TaskCard(task: UploadTaskEntity, onRetry: () -> Unit, onRemove: () -
                     append(" · 已传 $progress")
                     task.totalParts?.let { append("(${task.uploadedParts}/$it 片)") }
                 }
-                // R31：等待重试时显示下次自动重试时间（nextRetryAt 已入库但此前
-                // 从未向用户展示——「等待重试」无时间=用户不知道还要不要管它；
-                // AUTH_SUSPECT 暂停态 nextRetryAt=null=不显示，由 lastError 文案指引）
-                if (task.state == UploadTaskEntity.STATE_RETRY_WAIT) {
-                    task.nextRetryAt?.takeIf { it > System.currentTimeMillis() }?.let {
-                        append(" · ${formatTime(it)} 自动重试")
-                    }
+                // P0-B：不再显示具体重试时刻——repo 的 nextRetryAt（1s→64s+jitter）
+                // 与 WorkManager 真实指数退避（30s 起）不一致，显示确定时间是误导源；
+                // 改为次数进度（queueStateSubtitle）由状态行呈现
+                queueStateSubtitle(task.state, task.nextRetryAt, task.retryCount).takeIf { it.isNotEmpty() }?.let {
+                    append(" · $it")
                 }
                 append(" · ${formatTime(task.recordedAt)}")
             }

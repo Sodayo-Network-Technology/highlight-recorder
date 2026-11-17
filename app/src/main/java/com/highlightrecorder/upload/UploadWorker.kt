@@ -71,10 +71,11 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
                 //  保留同等信息:被拒原因方向+凭据保留+恢复后自动续传+重新配对指引;
                 //  原始 diagnose 保留在冒号后供支持排障,UI 侧 maxLines 截断。)
                 RetryDisposition.AUTH_SUSPECT -> {
+                    // P0-B：文案=纯函数（行动指引前置；"自动续传"如实描述为
+                    // 下次打开 App 的 reconcile，不是权限恢复立即触发）
                     deps.repo.markRetryWait(
                         id, attempt, null,
-                        "认证被拒：设备可能已被撤销或账号被冻结。凭据已保留，权限恢复后将自动继续上传；" +
-                            "如确认设备仍有效，请到「设置 → 重新配对」后再点重试。（${diagnose(e)}）",
+                        authSuspectUserMessage(diagnose(e)),
                     )
                     Result.failure()
                 }
