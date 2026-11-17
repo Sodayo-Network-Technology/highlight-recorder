@@ -22,8 +22,9 @@ import kotlinx.coroutines.sync.withLock
  * 上传执行器:读取 Room 任务 → 哈希 → Cloudreve 三步协议 → 状态回写。
  *
  * 错误处置遵循对接协议 §7;单并发由 [Deps.uploadMutex] 保证(§7 建议并发 1)。
- * PAUSE_FOR_REAUTH 返回 failure 结束重试,等用户重新配置后由「上传队列页」或
- * 下次 App 启动的 reconcile 重新入队。
+ * PAUSE_FOR_REAUTH 返回 failure 结束重试,等用户重新配对(成功回调立即恢复,
+ * UploadCoordinator.resumeAfterAuthRestored)、手动重试或下次 App 启动的
+ * reconcile 重新入队。
  */
 class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
 
@@ -52,9 +53,10 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
 
         runCatching { setForeground(buildForegroundInfo(task.fileName)) }
 
-        deps.repo.markUploading(id)
         return try {
             deps.uploadMutex.withLock {
+                // 持锁后再标记上传中:等锁的任务保持"排队中"显示,不虚标并发(§7 单并发)
+                deps.repo.markUploading(id)
                 executeUpload(deps, task, settings, base, paired)
             }
         } catch (e: UploadException) {

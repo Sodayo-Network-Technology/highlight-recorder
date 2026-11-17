@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -19,6 +20,9 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -87,6 +91,7 @@ fun UploadScreen(viewModel: UploadViewModel, onBack: () -> Unit) {
 
 @Composable
 private fun TaskCard(task: UploadTaskEntity, onRetry: () -> Unit, onRemove: () -> Unit) {
+    var confirmRemove by rememberSaveable { mutableStateOf(false) }
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(
             modifier = Modifier
@@ -162,9 +167,37 @@ private fun TaskCard(task: UploadTaskEntity, onRetry: () -> Unit, onRemove: () -
                 ) {
                     TextButton(onClick = onRetry) { Text("重试") }
                 }
-                TextButton(onClick = onRemove) { Text("清除记录") }
+                TextButton(onClick = { confirmRemove = true }) { Text("清除记录") }
             }
         }
+    }
+
+    if (confirmRemove) {
+        // 防误删确认:只清上传记录(数据库行),绝不删除本地录像原件;
+        // 未完成任务额外警示——清除后该录像不会再自动上传(取证链可能中断)
+        AlertDialog(
+            onDismissRequest = { confirmRemove = false },
+            title = { Text("清除这条上传记录?") },
+            text = {
+                Text(
+                    buildString {
+                        append("仅清除本机的上传记录,不会删除本地录像文件。")
+                        if (task.state != UploadTaskEntity.STATE_DONE) {
+                            append("该录像尚未上传成功,清除后将不再自动上传。")
+                        }
+                    },
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmRemove = false
+                    onRemove()
+                }) { Text("清除记录", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmRemove = false }) { Text("取消") }
+            },
+        )
     }
 }
 

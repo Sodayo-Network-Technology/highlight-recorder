@@ -30,6 +30,14 @@ data class UploadSettings(
 
     /** 三要素齐备才允许自动上传。 */
     val configured: Boolean get() = enabled && serverUrlValid && token.isNotBlank()
+
+    /**
+     * 队列自动调度闸:是否允许为 pending 任务自动(重新)入队/续传。
+     * 与 onClipSaved/UploadWorker 的凭据判据一致——已配对设备(生产正路,
+     * 静态令牌为空)也算齐备;[configured] 只认静态令牌,不能用于此场景。
+     */
+    fun canAutoQueue(paired: Boolean): Boolean =
+        enabled && serverUrlValid && (paired || token.isNotBlank())
 }
 
 class UploadSettingsRepository(private val context: Context) {

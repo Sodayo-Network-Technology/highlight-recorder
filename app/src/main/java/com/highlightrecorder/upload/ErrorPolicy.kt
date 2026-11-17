@@ -129,11 +129,12 @@ object WeakConfirm {
 /**
  * AUTH_SUSPECT 用户文案（纯函数，可单测）。
  * 真实恢复机制：Result.failure() 后 Worker 结束——不存在"权限恢复后立即自动执行"；
- * 自动续传发生在【下次打开 App】（UploadCoordinator.reconcile 重新入队全部 pending）。
+ * 重新配对成功回调会立即触发 pending 重新入队（UploadCoordinator.resumeAfterAuthRestored），
+ * 权限自行恢复（解冻）则由下次打开 App 的 reconcile 兜底恢复。
  * 行动指引前置（UI lastError 两行截断时不丢失关键操作）；技术诊断附尾供排障。
  */
 fun authSuspectUserMessage(diagnostic: String): String =
-    "设备可能被撤销或账号被冻结。请到「设置 → 重新配对」后点重试；" +
+    "设备可能被撤销或账号被冻结。请到「设置 → 重新配对」，重新配对成功后会自动继续上传；" +
         "权限恢复后，下次打开 App 也会自动继续上传。（${diagnostic}）"
 
 /**

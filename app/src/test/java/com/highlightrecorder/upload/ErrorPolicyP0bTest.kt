@@ -13,7 +13,9 @@ class ErrorPolicyP0bTest {
         // 行动指引在前（两行截断也不丢关键操作）
         assertTrue(msg.startsWith("设备可能被撤销或账号被冻结"))
         assertTrue(msg.contains("设置 → 重新配对"))
-        // 如实描述恢复机制：下次打开 App（reconcile），不是"立即自动"
+        // 如实描述恢复机制：重新配对成功后立即自动续传(queue-flow-hardening:
+        // pair 成功回调触发 pending 重新入队)；下次打开 App 也会兜底恢复
+        assertTrue(msg.contains("重新配对成功后会自动继续上传"))
         assertTrue(msg.contains("下次打开 App"))
         // 技术诊断附尾
         assertTrue(msg.endsWith("（401 unauthorized）"))

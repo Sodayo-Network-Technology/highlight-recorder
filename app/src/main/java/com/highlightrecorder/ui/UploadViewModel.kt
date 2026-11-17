@@ -5,6 +5,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.highlightrecorder.upload.BaseUrlValidator
 import com.highlightrecorder.upload.Deps
+import com.highlightrecorder.upload.UploadCoordinator
 import com.highlightrecorder.upload.UploadScheduler
 import com.highlightrecorder.upload.UploadSettings
 import com.highlightrecorder.upload.auth.DevicePairingClient
@@ -66,6 +67,9 @@ class UploadViewModel(app: Application) : AndroidViewModel(app) {
                 val result = client.exchange(code, name)
                 deps.tokenStore.save(result.token, result.deviceId, result.ingestUri, result.expiresAtMs)
                 refreshPairState()
+                // 配对成功立即恢复认证暂停/排队任务,不等下次 App 启动的 reconcile
+                // (兑现队列文案"重新配对成功后会自动继续上传")
+                UploadCoordinator.resumeAfterAuthRestored(getApplication())
                 _pairState.value = _pairState.value.copy(busy = false)
             } catch (e: Exception) {
                 _pairState.value = _pairState.value.copy(busy = false, error = e.message ?: "配对失败")
@@ -80,7 +84,16 @@ class UploadViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun updateSettings(transform: (UploadSettings) -> UploadSettings) {
-        viewModelScope.launch { deps.settingsRepo.update(transform) }
+        viewModelScope.launch {
+            val old = deps.settingsRepo.snapshot()
+            deps.settingsRepo.update(transform)
+            val next = deps.settingsRepo.snapshot()
+            // WorkManager 约束在入队时固定:wifiOnly 变化需对 pending 任务重新入队,
+            // 否则已排队任务一直沿用旧约束(如切"仅 Wi-Fi"后仍走流量/反之傻等 Wi-Fi)
+            if (old.wifiOnly != next.wifiOnly) {
+                UploadCoordinator.onWifiOnlyChanged(getApplication(), next.wifiOnly)
+            }
+        }
     }
 
     /** 手动重试:重置状态后重新入队(服务端幂等键不变)。 */

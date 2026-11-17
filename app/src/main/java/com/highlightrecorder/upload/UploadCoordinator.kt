@@ -80,12 +80,47 @@ object UploadCoordinator {
                 val app = context.applicationContext
                 val deps = Deps.get(app)
                 deps.repo.resetStuck()
-                val settings = deps.settingsRepo.snapshot()
-                if (!settings.configured) return@launch
-                deps.repo.pending().forEach {
-                    UploadScheduler.enqueue(app, it.clientUploadId, settings.wifiOnly)
-                }
+                enqueuePending(app)
             }.onFailure { FileLogger.log(TAG, "reconcile failed", it) }
+        }
+    }
+
+    /**
+     * 配对成功后立即恢复队列:把认证暂停(RETRY_WAIT+nextRetryAt=null)/排队中的
+     * 任务按当前设置重新入队,不再等下次 App 启动的 reconcile(重新配对是用户
+     * 当场完成的动作,当场恢复才兑现"配对成功后自动续传"的文案承诺)。
+     */
+    fun resumeAfterAuthRestored(context: Context) {
+        scope.launch {
+            runCatching { enqueuePending(context.applicationContext) }
+                .onFailure { FileLogger.log(TAG, "resumeAfterAuthRestored failed", it) }
+        }
+    }
+
+    /**
+     * wifiOnly 切换后按新网络约束对全部 pending 任务重新入队:WorkManager 的
+     * constraint 在入队时固定(UploadScheduler),DataStore 变更不会传播到已排队的
+     * work。pending 只含 QUEUED/RETRY_WAIT(REPLACE 策略不会打断进行中的 UPLOADING)。
+     */
+    fun onWifiOnlyChanged(context: Context, wifiOnly: Boolean) {
+        scope.launch {
+            runCatching { enqueuePending(context.applicationContext, wifiOnly) }
+                .onFailure { FileLogger.log(TAG, "onWifiOnlyChanged failed", it) }
+        }
+    }
+
+    /**
+     * 按判据 [UploadSettings.canAutoQueue] 把全部 pending 任务重新入队。
+     * 旧实现用 settings.configured(静态令牌判据)做守卫,纯配对设备
+     * (生产正路,静态令牌为空)被判为未配置,任务连启动恢复也会被跳过。
+     */
+    private suspend fun enqueuePending(app: Context, wifiOnly: Boolean? = null) {
+        val deps = Deps.get(app)
+        val settings = deps.settingsRepo.snapshot()
+        val paired = deps.tokenStore.isPaired()
+        if (!settings.canAutoQueue(paired)) return
+        deps.repo.pending().forEach {
+            UploadScheduler.enqueue(app, it.clientUploadId, wifiOnly ?: settings.wifiOnly)
         }
     }
 
