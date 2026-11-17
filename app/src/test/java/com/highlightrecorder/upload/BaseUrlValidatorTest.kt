@@ -4,9 +4,18 @@ import okhttp3.HttpUrl
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assume.assumeFalse
 import org.junit.Test
 
 class BaseUrlValidatorTest {
+    init {
+        // Debug variant 的 ALLOW_PRIVATE_BASE_URL 旁路开启时，环回/私网被
+        // 显式放行（隔离联调用途）——拒绝类断言在该形态下不成立，跳过而非假红
+        assumeFalse(
+            com.highlightrecorder.BuildConfig.DEBUG &&
+                com.highlightrecorder.BuildConfig.ALLOW_PRIVATE_BASE_URL,
+        )
+    }
 
     private fun v(raw: String): HttpUrl? = BaseUrlValidator.validate(raw)
 
