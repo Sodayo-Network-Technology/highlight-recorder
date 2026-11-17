@@ -67,10 +67,14 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
                 // 契约 §6:40020/401=撤销/冻结/权限回收(服务端不可区分)——暂停任务+
                 // 【保留 Token】+保留原件;解冻/权限恢复后同 Token 自动恢复。
                 // 仅用户在设置页明确「解除配对」才清除凭据,此处绝不清理。
+                // (R31 文案:技术码 AUTH_SUSPECT 退出用户可见 lastError——用户语
+                //  保留同等信息:被拒原因方向+凭据保留+恢复后自动续传+重新配对指引;
+                //  原始 diagnose 保留在冒号后供支持排障,UI 侧 maxLines 截断。)
                 RetryDisposition.AUTH_SUSPECT -> {
                     deps.repo.markRetryWait(
                         id, attempt, null,
-                        "AUTH_SUSPECT(认证被拒,凭据已保留;若为冻结/权限回收,恢复后自动续传): ${diagnose(e)}",
+                        "认证被拒：设备可能已被撤销或账号被冻结。凭据已保留，权限恢复后将自动继续上传；" +
+                            "如确认设备仍有效，请到「设置 → 重新配对」后再点重试。（${diagnose(e)}）",
                     )
                     Result.failure()
                 }

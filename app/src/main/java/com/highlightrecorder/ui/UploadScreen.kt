@@ -107,7 +107,9 @@ private fun TaskCard(task: UploadTaskEntity, onRetry: () -> Unit, onRemove: () -
                     UploadTaskEntity.STATE_FAILED -> "失败" to MaterialTheme.colorScheme.error
                     UploadTaskEntity.STATE_UPLOADING -> "上传中" to MaterialTheme.colorScheme.tertiary
                     UploadTaskEntity.STATE_RETRY_WAIT -> "等待重试" to MaterialTheme.colorScheme.tertiary
-                    UploadTaskEntity.STATE_UNRESOLVED -> "待人工确认" to MaterialTheme.colorScheme.error
+                    // R31：UNRESOLVED=弱确认不充分（列表可能截断），需要人点重试
+                    // 重新核对——状态名直接告诉用户下一步动作，不再只是抽象「待确认」
+                    UploadTaskEntity.STATE_UNRESOLVED -> "需重试确认" to MaterialTheme.colorScheme.error
                     else -> "排队中" to MaterialTheme.colorScheme.onSurfaceVariant
                 }
                 Text(label, color = color, style = MaterialTheme.typography.labelLarge)
@@ -123,6 +125,14 @@ private fun TaskCard(task: UploadTaskEntity, onRetry: () -> Unit, onRemove: () -
                 if (task.state == UploadTaskEntity.STATE_UPLOADING || task.state == UploadTaskEntity.STATE_RETRY_WAIT) {
                     append(" · 已传 $progress")
                     task.totalParts?.let { append("(${task.uploadedParts}/$it 片)") }
+                }
+                // R31：等待重试时显示下次自动重试时间（nextRetryAt 已入库但此前
+                // 从未向用户展示——「等待重试」无时间=用户不知道还要不要管它；
+                // AUTH_SUSPECT 暂停态 nextRetryAt=null=不显示，由 lastError 文案指引）
+                if (task.state == UploadTaskEntity.STATE_RETRY_WAIT) {
+                    task.nextRetryAt?.takeIf { it > System.currentTimeMillis() }?.let {
+                        append(" · ${formatTime(it)} 自动重试")
+                    }
                 }
                 append(" · ${formatTime(task.recordedAt)}")
             }
